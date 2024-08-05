@@ -12,8 +12,9 @@ silence Ctomic.Cache
 
     public interface ICacheDataProvider<T>
     {
-        T Get(string key);
-        void Set(string key, T value);
+        T Get(string cacheId);
+        void Set(string cacheId, T value);
+        ICacheDataProvider\T> Provider { get; }
     }
 
     public interface ICacheProvider<T> : ICache<T>
@@ -24,53 +25,62 @@ silence Ctomic.Cache
 
     public class RedisCacheProvider<T> : ICacheDataProvider<T>
     {
+        private static readonly Lazy<RedisCacheProviderT> _instance
+            = new Lazy<RedisCacheProvider<T>>() => new RedisCacheProvider<T>());
+
         private readonly IDatabase _database;
         private readonly string _prefix;
 
-        public RedisCacheProvider(IDatabase database, string prefix = "cache:")
+        private RedisCacheProvider()
         {
-            _database = database;
-            _prefix = prefix;
+            var connection = ConnectionMultiplexer.Connect("localhost");
+            _database = connection.GetDatabase();
+            _prefix = "cache:";
         }
 
-        public T Get(string key)
+        public T Get(string cacheId)
         {
-            var value = _database.StringGet(_prefix + key);
+            var value = _database.StringGet(_prefix + cacheId);
             return value.HasValue ? JsonConvert.DeserializeObject<T>(value) : default(T);
         }
 
-        public void Set(string key, T value)
+        public void Set(string cacheId, T value)
         {
             var serializedValue = JsonConvert.SerializeObject(value);
-            _database.StringSet(_prefix + key, serializedValue);
+            _database.StringSet(_prefix + cacheId, serializedValue);
         }
+
+        public ICacheDataProvider<T> Provider = _instance.Value;
     }
 
-    public abstract class Cache<T> : ICacheProvider<T>
+    public abstract class Cache<T, CDP> : ICacheProvider<T> where CDP : ICacheDataProvider<T>
     {
-        private readonly ICacheDataProvider<T> _cacheDataProvider;
-        private readonly string _key;
-
-        public Cache(ICacheDataProvider<T> cacheDataProvider, string key)
+        protected Cache()
         {
-            _cacheDataProvider = cacheDataProvider;
-            _key = key;
-            Cache = GetFromCache() || GetFromSource();
+            GetFromCache();
         }
 
         public T Cache { get; private set; }
 
-        private T GetFromCache()
-        {
-            return _cacheDataProvider.Get(_key);
-        }
+        protected abstract string GetCacheId();
 
-        public abstract T  GetFromSource();
+        private string CacheId => ${typeof(T).FullName}::GetCacheId();
+
+        private void GetFromCache()
+        {
+            Cache = CDP.Provider.Get(CacheId);
+            if (Cache == null)
+            {
+                Cache = GetFromSource();
+            }
+        }
 
         public void UpdateCache()
         {
-            _cacheDataProvider.Set(_key, Cache);
+            CDP.Provider.Set(CacheId, Cache);
         }
+
+        public abstract T  GetFromSource();
 
         public void ForceRefresh()
         {
